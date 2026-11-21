@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+  <title>Jarvis</title>
+  <meta name="theme-color" content="#050605">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Jarvis">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/icon-192.png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@1&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #050605;
+      --neon: #c9f56a;
+      --neon-dim: rgba(201, 245, 106, .35);
+      --text: #f2f5ee;
+      --muted: #8e968a;
+      --card: rgba(255, 255, 255, .05);
+      --border: rgba(255, 255, 255, .09);
+      --danger: #ff6b5e;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
+    body {
+      font-family: Inter, system-ui, -apple-system, sans-serif;
+      display: flex; flex-direction: column; align-items: center;
+      padding: calc(env(safe-area-inset-top) + 24px) 16px calc(env(safe-area-inset-bottom) + 24px);
+      overflow: hidden; user-select: none; -webkit-user-select: none;
+      background: radial-gradient(ellipse at 50% 42%, rgba(201,245,106,.07), transparent 60%), var(--bg);
+    }
+    h1 {
+      font-family: "Instrument Serif", Georgia, serif; font-style: italic; font-weight: 400;
+      font-size: clamp(44px, 12vw, 64px); letter-spacing: .02em; margin: 0;
+      color: var(--neon); text-shadow: 0 0 18px var(--neon-dim), 0 0 42px rgba(201,245,106,.18);
+    }
+    #estado {
+      margin-top: 6px; font-size: 13px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted);
+      min-height: 1.2em;
+    }
+    #palco { flex: 1; width: 100%; display: grid; place-items: center; position: relative; min-height: 0; }
+    #orbe { width: min(78vw, 340px); aspect-ratio: 1; cursor: pointer; touch-action: manipulation; }
+    #legenda {
+      width: 100%; max-width: 520px; min-height: 4.6em; text-align: center;
+      font-size: 19px; line-height: 1.4; color: var(--text); margin-bottom: 18px;
+      display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    #legenda .voce { color: var(--muted); font-size: 15px; display: block; margin-bottom: 4px; }
+    .controles { display: flex; gap: 14px; align-items: center; justify-content: center; }
+    button {
+      font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--border);
+      border-radius: 999px; padding: 14px 22px; font-size: 16px; font-weight: 500; cursor: pointer;
+    }
+    button:active { transform: scale(.97); }
+    button.principal { background: var(--neon); color: #0b1004; border-color: transparent; font-weight: 600; }
+    button.perigo { color: var(--danger); }
+    button[hidden] { display: none; }
+    #senha-box {
+      position: fixed; inset: 0; background: rgba(5,6,5,.94); display: grid; place-items: center; padding: 16px; z-index: 5;
+    }
+    #senha-box[hidden] { display: none; }
+    .cartao {
+      width: 100%; max-width: 360px; background: #0d0f0c; border: 1px solid var(--border);
+      border-radius: 20px; padding: 24px; text-align: center;
+    }
+    .cartao p { color: var(--muted); margin: 0 0 16px; font-size: 15px; }
+    .cartao input {
+      width: 100%; font: inherit; font-size: 18px; padding: 14px 16px; border-radius: 12px; margin-bottom: 14px;
+      background: #000; color: var(--text); border: 1px solid var(--border); text-align: center;
+    }
+    .cartao input:focus { outline: 2px solid var(--neon); outline-offset: 1px; }
+    .cartao button { width: 100%; }
+    #erro { color: var(--danger); font-size: 14px; min-height: 1.3em; margin: 10px 0 0; text-align: center; }
+  </style>
+</head>
+<body>
+  <h1>Jarvis</h1>
+  <div id="estado" aria-live="polite">Toque na esfera para começar</div>
+
+  <div id="palco">
+    <canvas id="orbe" aria-label="Esfera do Jarvis. Toque para conversar." role="button" tabindex="0"></canvas>
+  </div>
+
+  <div id="legenda" aria-live="polite"></div>
+
+  <div class="controles">
+    <button id="btn-iniciar" class="principal">Falar com o Jarvis</button>
+    <button id="btn-mudo" hidden>Silenciar microfone</button>
+    <button id="btn-encerrar" class="perigo" hidden>Encerrar</button>
+  </div>
+  <p id="erro" role="alert"></p>
+
+  <div id="senha-box" hidden>
+    <form class="cartao" id="form-senha">
+      <p>Digite a senha do Jarvis.<br>Só precisa fazer isso uma vez neste aparelho.</p>
+      <input id="campo-senha" type="password" autocomplete="current-password" placeholder="Senha" required>
+      <button class="principal" type="submit">Entrar</button>
+    </form>
+  </div>
+
+  <audio id="voz" autoplay playsinline></audio>
+  <script src="/app.js" defer></script>
+</body>
+</html>
