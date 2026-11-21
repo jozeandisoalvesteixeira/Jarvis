@@ -1,10 +1,10 @@
-// Jarvis: conversa por voz ao vivo (OpenAI Realtime via WebRTC).
-// Fluxo: toque -> pede chave temporária ao /api/session -> abre o microfone ->
-// conecta com a OpenAI -> o Jarvis cumprimenta e a conversa segue sozinha.
+// Jarvis: conversa por voz ao vivo com o Gemini Live (Google), por WebSocket.
+// Fluxo: toque -> pede token temporário ao /api/session -> abre o microfone ->
+// conecta -> o Jarvis cumprimenta -> a conversa segue sozinha (dá para interromper).
 
 const $ = (id) => document.getElementById(id);
 const el = {
-  estado: $("estado"), legenda: $("legenda"), erro: $("erro"), orbe: $("orbe"), voz: $("voz"),
+  estado: $("estado"), legenda: $("legenda"), erro: $("erro"), orbe: $("orbe"),
   iniciar: $("btn-iniciar"), mudo: $("btn-mudo"), encerrar: $("btn-encerrar"),
   senhaBox: $("senha-box"), formSenha: $("form-senha"), campoSenha: $("campo-senha"),
 };
@@ -13,10 +13,14 @@ const CHAVE_SENHA = "jarvis.senha";
 const lerSenha = () => { try { return localStorage.getItem(CHAVE_SENHA) || ""; } catch { return ""; } };
 const gravarSenha = (s) => { try { s ? localStorage.setItem(CHAVE_SENHA, s) : localStorage.removeItem(CHAVE_SENHA); } catch {} };
 
-let pc = null, canal = null, microfone = null, contexto = null, analisadorMic = null, analisadorVoz = null;
+const WS_BASE = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
+
+let ws = null, microfone = null, contexto = null, noMic = null, fonteMic = null;
+let analisadorMic = null, analisadorVoz = null, saidaVoz = null;
+let tocando = new Set(), proximoInicio = 0;
 let fase = "parado"; // parado | conectando | ouvindo | pensando | falando
-let mudo = false, wakeLock = null;
-let falaJarvis = "", falaVoce = "";
+let mudo = false, wakeLock = null, encerrandoDePropósito = false;
+let falaJarvis = "", falaVoce = "", novoTurno = true;
 
 const ROTULOS = {
   parado: "Toque na esfera para começar",
@@ -67,13 +71,16 @@ async function pedirToken() {
 async function iniciar() {
   if (fase !== "parado") return;
   mostrarErro("");
-  falaJarvis = ""; falaVoce = ""; mostrarLegenda();
+  falaJarvis = ""; falaVoce = ""; novoTurno = true; mostrarLegenda();
+  encerrandoDePropósito = false;
   mudarFase("conectando");
 
+  // O áudio e o microfone precisam ser ligados logo no toque (regra do iPhone).
   try {
-    // O microfone precisa ser pedido logo no toque (regra do iPhone).
+    contexto = contexto || new (window.AudioContext || window.webkitAudioContext)();
+    await contexto.resume();
     microfone = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
     });
   } catch (e) {
     encerrar();
@@ -84,82 +91,75 @@ async function iniciar() {
   }
 
   try {
-    prepararAudio();
+    await prepararAudio();
     const sessao = await pedirToken();
     if (!sessao) { encerrar(); return; }
-
-    pc = new RTCPeerConnection();
-    pc.ontrack = (ev) => {
-      el.voz.srcObject = ev.streams[0];
-      el.voz.play().catch(() => {});
-      ligarAnalisadorVoz(ev.streams[0]);
-    };
-    pc.onconnectionstatechange = () => {
-      if (["failed", "disconnected"].includes(pc?.connectionState)) {
-        encerrar();
-        mostrarErro("A conexão caiu. Toque para falar de novo.");
-      }
-    };
-    microfone.getAudioTracks().forEach((t) => pc.addTrack(t, microfone));
-
-    canal = pc.createDataChannel("oai-events");
-    canal.onopen = () => {
-      mudarFase("pensando");
-      enviar({
-        type: "response.create",
-        response: { instructions: "Cumprimente o Joze em uma frase curta, de acordo com o horário, e pergunte em que pode ajudar." },
-      });
-    };
-    canal.onmessage = (ev) => { try { tratarEvento(JSON.parse(ev.data)); } catch {} };
-
-    const oferta = await pc.createOffer();
-    await pc.setLocalDescription(oferta);
-    const r = await fetch(`https://api.openai.com/v1/realtime/calls?model=${encodeURIComponent(sessao.modelo)}`, {
-      method: "POST",
-      body: oferta.sdp,
-      headers: { Authorization: `Bearer ${sessao.token}`, "Content-Type": "application/sdp" },
-    });
-    if (!r.ok) throw new Error(`A OpenAI não aceitou a conexão (${r.status}).`);
-    await pc.setRemoteDescription({ type: "answer", sdp: await r.text() });
-    manterTelaAcesa();
+    conectar(sessao);
   } catch (e) {
     encerrar();
     mostrarErro(e?.message || "Não consegui conectar. Tente de novo.");
   }
 }
 
-function enviar(obj) { if (canal?.readyState === "open") canal.send(JSON.stringify(obj)); }
+function conectar({ token, modelo }) {
+  ws = new WebSocket(`${WS_BASE}?access_token=${encodeURIComponent(token)}`);
+  ws.onopen = () => enviar({ setup: { model: modelo } });
+  ws.onmessage = async (ev) => {
+    try {
+      const texto = typeof ev.data === "string" ? ev.data : await ev.data.text();
+      tratarMensagem(JSON.parse(texto));
+    } catch {}
+  };
+  ws.onerror = () => {};
+  ws.onclose = (ev) => {
+    if (encerrandoDePropósito || fase === "parado") return;
+    encerrar();
+    mostrarErro(ev.reason ? `A conexão foi encerrada: ${ev.reason}` : "A conexão caiu. Toque para falar de novo.");
+  };
+}
 
-function tratarEvento(e) {
-  switch (e.type) {
-    case "input_audio_buffer.speech_started":
-      falaVoce = ""; falaJarvis = ""; mostrarLegenda();
-      mudarFase("ouvindo");
-      break;
-    case "input_audio_buffer.speech_stopped":
-      mudarFase("pensando");
-      break;
-    case "conversation.item.input_audio_transcription.completed":
-      falaVoce = (e.transcript || "").trim(); mostrarLegenda();
-      break;
-    case "response.output_audio_transcript.delta":
-    case "response.audio_transcript.delta":
-      falaJarvis += e.delta || ""; mostrarLegenda();
-      break;
-    case "output_audio_buffer.started":
-      mudarFase("falando");
-      break;
-    case "output_audio_buffer.stopped":
-    case "output_audio_buffer.cleared":
-      if (fase === "falando") mudarFase("ouvindo");
-      break;
-    case "response.done":
-      if (fase === "pensando") mudarFase("ouvindo");
-      break;
-    case "error":
-      mostrarErro(e.error?.message || "O Jarvis teve um problema.");
-      break;
+function enviar(obj) { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
+
+function tratarMensagem(m) {
+  if (m.setupComplete) {
+    mudarFase("pensando");
+    // Liga o envio do microfone e pede o cumprimento inicial.
+    noMic.port.onmessage = (ev) => { if (!mudo) enviarAudio(ev.data); };
+    enviar({
+      clientContent: {
+        turns: [{ role: "user", parts: [{ text: "(O Joze acabou de abrir o app. Cumprimente-o em uma frase curta, de acordo com o horário, e pergunte em que pode ajudar.)" }] }],
+        turnComplete: true,
+      },
+    });
+    manterTelaAcesa();
+    return;
   }
+
+  const sc = m.serverContent;
+  if (sc) {
+    if (sc.interrupted) { pararVoz(); mudarFase("ouvindo"); }
+
+    if (sc.inputTranscription?.text) {
+      if (novoTurno) { falaVoce = ""; falaJarvis = ""; novoTurno = false; }
+      falaVoce += sc.inputTranscription.text;
+      mostrarLegenda();
+      if (fase !== "falando") mudarFase("ouvindo");
+    }
+    if (sc.outputTranscription?.text) {
+      falaJarvis += sc.outputTranscription.text;
+      mostrarLegenda();
+    }
+    for (const parte of sc.modelTurn?.parts || []) {
+      const d = parte.inlineData;
+      if (d?.data && (d.mimeType || "").startsWith("audio/")) {
+        const taxa = Number((d.mimeType.match(/rate=(\d+)/) || [])[1]) || 24000;
+        tocarAudio(d.data, taxa);
+      }
+    }
+    if (sc.turnComplete) novoTurno = true;
+  }
+
+  if (m.goAway) mostrarErro("A sessão está perto do limite de tempo. Se cair, toque para falar de novo.");
 }
 
 function alternarMudo() {
@@ -171,11 +171,13 @@ function alternarMudo() {
 }
 
 function encerrar() {
-  try { canal?.close(); } catch {}
-  try { pc?.close(); } catch {}
+  encerrandoDePropósito = true;
+  try { ws?.close(); } catch {}
+  ws = null;
+  pararVoz();
+  try { fonteMic?.disconnect(); noMic?.disconnect(); } catch {}
   microfone?.getTracks().forEach((t) => t.stop());
-  el.voz.srcObject = null;
-  canal = null; pc = null; microfone = null; analisadorMic = null; analisadorVoz = null;
+  microfone = null; fonteMic = null; noMic = null; analisadorMic = null;
   mudo = false; el.mudo.textContent = "Silenciar microfone";
   try { wakeLock?.release(); } catch {}
   wakeLock = null;
@@ -205,26 +207,69 @@ el.formSenha.addEventListener("submit", (ev) => {
   iniciar();
 });
 
-// ---------- Áudio para animar a esfera ----------
+// ---------- Áudio ----------
 
-function prepararAudio() {
-  try {
-    contexto = contexto || new (window.AudioContext || window.webkitAudioContext)();
-    contexto.resume?.();
-    const src = contexto.createMediaStreamSource(microfone);
-    analisadorMic = contexto.createAnalyser();
-    analisadorMic.fftSize = 512;
-    src.connect(analisadorMic);
-  } catch { analisadorMic = null; }
-}
+async function prepararAudio() {
+  await contexto.audioWorklet.addModule("/mic-worklet.js");
+  fonteMic = contexto.createMediaStreamSource(microfone);
+  noMic = new AudioWorkletNode(contexto, "microfone-jarvis");
+  analisadorMic = contexto.createAnalyser();
+  analisadorMic.fftSize = 512;
+  fonteMic.connect(analisadorMic);
+  fonteMic.connect(noMic);
+  // O nó precisa chegar ao destino para rodar; o ganho zero evita eco.
+  const silencio = contexto.createGain();
+  silencio.gain.value = 0;
+  noMic.connect(silencio).connect(contexto.destination);
 
-function ligarAnalisadorVoz(stream) {
-  try {
-    const src = contexto.createMediaStreamSource(stream);
+  if (!saidaVoz) {
+    saidaVoz = contexto.createGain();
     analisadorVoz = contexto.createAnalyser();
     analisadorVoz.fftSize = 512;
-    src.connect(analisadorVoz);
-  } catch { analisadorVoz = null; }
+    saidaVoz.connect(analisadorVoz);
+    analisadorVoz.connect(contexto.destination);
+  }
+}
+
+function paraBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+function enviarAudio(buffer) {
+  enviar({ realtimeInput: { audio: { data: paraBase64(buffer), mimeType: "audio/pcm;rate=16000" } } });
+}
+
+function tocarAudio(b64, taxa) {
+  const bin = atob(b64);
+  const n = bin.length >> 1;
+  const buf = contexto.createBuffer(1, n, taxa);
+  const canal = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) {
+    let v = bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8);
+    if (v >= 0x8000) v -= 0x10000;
+    canal[i] = v / 0x8000;
+  }
+  const src = contexto.createBufferSource();
+  src.buffer = buf;
+  src.connect(saidaVoz);
+  const inicio = Math.max(contexto.currentTime + 0.03, proximoInicio);
+  src.start(inicio);
+  proximoInicio = inicio + buf.duration;
+  tocando.add(src);
+  mudarFase("falando");
+  src.onended = () => {
+    tocando.delete(src);
+    if (!tocando.size && fase === "falando") mudarFase("ouvindo");
+  };
+}
+
+function pararVoz() {
+  for (const s of tocando) { try { s.onended = null; s.stop(); } catch {} }
+  tocando.clear();
+  proximoInicio = 0;
 }
 
 const amostra = new Uint8Array(512);
@@ -250,7 +295,7 @@ function desenhar(t) {
 
   let alvo = 0.05;
   if (fase === "ouvindo") alvo = mudo ? 0.03 : 0.12 + nivel(analisadorMic) * 0.9;
-  else if (fase === "falando") alvo = analisadorVoz ? 0.25 + nivel(analisadorVoz) * 0.9 : 0.35 + 0.25 * Math.abs(Math.sin(t / 140));
+  else if (fase === "falando") alvo = 0.25 + nivel(analisadorVoz) * 0.9;
   else if (fase === "pensando" || fase === "conectando") alvo = 0.18 + 0.1 * Math.sin(t / 260);
   energia += (alvo - energia) * 0.18;
 
@@ -258,16 +303,13 @@ function desenhar(t) {
   const raio = base * (1 + energia * 0.35);
   const brilho = fase === "parado" ? 0.55 : 1;
 
-  // halo
   const halo = ctx.createRadialGradient(c, c, raio * 0.4, c, c, W * 0.5);
   halo.addColorStop(0, `rgba(201,245,106,${0.22 * brilho + energia * 0.2})`);
   halo.addColorStop(1, "rgba(201,245,106,0)");
   ctx.fillStyle = halo;
   ctx.fillRect(0, 0, W, W);
 
-  // anéis girando
-  const aneis = 3;
-  for (let i = 0; i < aneis; i++) {
+  for (let i = 0; i < 3; i++) {
     const r = raio * (1.45 + i * 0.32) + energia * W * 0.03 * (i + 1);
     const giro = (t / (2600 + i * 900)) * (i % 2 ? -1 : 1);
     ctx.save();
@@ -282,7 +324,6 @@ function desenhar(t) {
     ctx.restore();
   }
 
-  // núcleo com borda ondulada pela voz
   ctx.beginPath();
   const pontos = 96;
   for (let k = 0; k <= pontos; k++) {

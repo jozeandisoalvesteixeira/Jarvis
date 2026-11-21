@@ -3,8 +3,13 @@
   "private": true,
   "type": "module",
   "description": "Jarvis: assistente pessoal por voz do Joze (Desvincule Já).",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "check": "node --check api/session.js && node --check api/_persona.js && node --check public/app.js"
+    "check": "node --check api/session.js && node --check api/_persona.js && node --check public/app.js && node --check public/mic-worklet.js"
+  },
+  "dependencies": {
+    "@google/genai": "^3.6.1"
   }
 }

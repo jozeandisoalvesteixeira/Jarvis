@@ -10,8 +10,10 @@ Projeto separado do CRM: não altera nada no `crmdesvinculeja`.
 
 - `public/`: a tela (esfera animada, legendas, botões). Pode ser instalada no
   celular como app (Adicionar à Tela de Início).
-- `api/session.js`: confere a senha e cria uma chave temporária de 10 minutos
-  para a voz em tempo real da OpenAI. A chave de verdade fica só no servidor.
+- `api/session.js`: confere a senha e cria um token temporário (1 uso) para a
+  voz ao vivo do **Gemini Live** (Google). A chave de verdade fica só no servidor.
+  Escolhe sozinho o melhor modelo de voz ao vivo disponível para a chave.
+- `public/mic-worklet.js`: converte o som do microfone para o formato do Gemini.
 - `api/_persona.js`: quem o Jarvis é, como fala e o que sabe sobre a
   Desvincule Já. Edite aqui para mudar a personalidade.
 
@@ -19,15 +21,16 @@ Projeto separado do CRM: não altera nada no `crmdesvinculeja`.
 
 | Nome | O que é |
 |---|---|
-| `OPENAI_API_KEY` | Chave da OpenAI (platform.openai.com > API keys) |
+| `GEMINI_API_KEY` | Chave grátis do Google AI Studio (aistudio.google.com > Get API key) |
 | `JARVIS_SENHA` | Senha que você digita no app na primeira vez |
-| `JARVIS_VOZ` | Opcional. Padrão `cedar`. Outras: `marin`, `ash`, `ballad`, `echo`, `sage`, `verse` |
-| `JARVIS_MODELO` | Opcional. Padrão `gpt-realtime` |
+| `JARVIS_VOZ` | Opcional. Padrão `Charon`. Outras: `Puck`, `Fenrir`, `Orus`, `Kore`, `Aoede` |
+| `JARVIS_MODELO` | Opcional. Força um modelo específico do Gemini Live |
 
-## Custos
+## Custos e privacidade
 
-A voz em tempo real da OpenAI é paga por uso. Coloque um limite mensal em
-platform.openai.com > Settings > Limits.
+O plano grátis do Gemini tem limite de uso diário e o Google pode usar as
+conversas para melhorar os produtos dele. Antes de ligar dados de clientes
+(CRM), ative o faturamento na chave: no plano pago os dados não são usados.
 
 ## Verificação
 
