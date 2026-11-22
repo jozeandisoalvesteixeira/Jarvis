@@ -10,8 +10,12 @@ const el = {
 };
 
 const CHAVE_SENHA = "jarvis.senha";
-const lerSenha = () => { try { return localStorage.getItem(CHAVE_SENHA) || ""; } catch { return ""; } };
+// A senha pode vir no próprio link (…/?s=SENHA). O ícone da tela de início
+// guarda esse link, então quem abre pelo ícone nunca precisa digitar a senha.
+const SENHA_DO_LINK = new URLSearchParams(location.search).get("s") || "";
+const lerSenha = () => { try { return localStorage.getItem(CHAVE_SENHA) || SENHA_DO_LINK; } catch { return SENHA_DO_LINK; } };
 const gravarSenha = (s) => { try { s ? localStorage.setItem(CHAVE_SENHA, s) : localStorage.removeItem(CHAVE_SENHA); } catch {} };
+if (SENHA_DO_LINK) gravarSenha(SENHA_DO_LINK);
 
 const WS_BASE = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
 
@@ -69,7 +73,7 @@ async function buscarToken() {
     body: JSON.stringify({ senha }),
   });
   const j = await r.json().catch(() => ({}));
-  if (r.status === 401) { gravarSenha(""); const e = new Error("Senha incorreta. Tente de novo."); e.senha = true; throw e; }
+  if (r.status === 401) { gravarSenha(""); if (SENHA_DO_LINK === senha) history.replaceState(null, "", location.pathname); const e = new Error("Senha incorreta. Tente de novo."); e.senha = true; throw e; }
   if (!r.ok) throw new Error(j.erro || "O servidor do Jarvis não respondeu.");
   return { ...j, em: Date.now() };
 }
@@ -129,7 +133,7 @@ async function iniciar(auto = false) {
     await audioOk;
     await prepararAudio();
     ligarMicrofoneSePronto();
-    if (contexto.state !== "running") mostrarErro("Toque em qualquer lugar da tela para ouvir o Jarvis.");
+    if (contexto.state !== "running") { el.legenda.textContent = "👆 Toque em qualquer lugar para falar com o Jarvis"; }
   } catch (e) {
     encerrar();
     if (auto) { el.estado.textContent = "Toque em qualquer lugar para começar"; return; }
@@ -406,7 +410,7 @@ el.orbe.addEventListener("keydown", (ev) => { if ((ev.key === "Enter" || ev.key 
 document.addEventListener("pointerdown", (ev) => {
   if (ev.target.closest("#senha-box, button")) return;
   if (contexto && contexto.state !== "running") {
-    contexto.resume().then(() => { if (el.erro.textContent.startsWith("Toque em qualquer lugar")) mostrarErro(""); }).catch(() => {});
+    contexto.resume().then(() => { if (el.legenda.textContent.startsWith("👆")) el.legenda.textContent = ""; }).catch(() => {});
   }
   if (fase === "parado") iniciar();
 });
