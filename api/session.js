@@ -1,9 +1,9 @@
-// Cria um token temporário (1 uso, 30 min) para o navegador falar direto com a
+// Cria um token temporário (1 uso, vale 30 min) para o navegador falar direto com a
 // voz ao vivo do Gemini (Google). A chave de verdade (GEMINI_API_KEY) nunca sai
 // do servidor. A senha (JARVIS_SENHA) impede que estranhos usem a sua cota.
 
 import { timingSafeEqual } from "node:crypto";
-import { GoogleGenAI, Modality } from "@google/genai";
+import { GoogleGenAI, Modality, EndSensitivity, StartSensitivity } from "@google/genai";
 import { instrucoes } from "./_persona.js";
 
 const VOZ = process.env.JARVIS_VOZ || "Charon";
@@ -54,13 +54,22 @@ export default async function handler(req, res) {
       config: {
         uses: 1,
         expireTime: new Date(agora + 30 * 60 * 1000).toISOString(),
-        newSessionExpireTime: new Date(agora + 60 * 1000).toISOString(),
+        newSessionExpireTime: new Date(agora + 25 * 60 * 1000).toISOString(), // o app busca o token antes do toque
         liveConnectConstraints: {
           model: modelo,
           config: {
             responseModalities: [Modality.AUDIO],
             systemInstruction: instrucoes(),
             speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOZ } } },
+            // Responde logo que você para de falar (padrão espera mais silêncio).
+            realtimeInputConfig: {
+              automaticActivityDetection: {
+                startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_HIGH,
+                endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_HIGH,
+                prefixPaddingMs: 40,
+                silenceDurationMs: Number(process.env.JARVIS_SILENCIO_MS) || 450,
+              },
+            },
             inputAudioTranscription: {},
             outputAudioTranscription: {},
           },

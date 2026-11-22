@@ -54,54 +54,100 @@ function mostrarLegenda() {
 
 // ---------- Conexão ----------
 
-async function pedirToken() {
+// O token é buscado ANTES do toque e guardado aqui (vale ~25 min, 1 uso),
+// assim a conversa começa sem esperar o servidor.
+let tokenPronto = null; // { token, modelo, em }
+let buscandoToken = null;
+const TOKEN_VALIDADE_MS = 20 * 60 * 1000;
+
+async function buscarToken() {
   const senha = lerSenha();
-  if (!senha) { pedirSenha(); return null; }
+  if (!senha) return null;
   const r = await fetch("/api/session", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ senha }),
   });
   const j = await r.json().catch(() => ({}));
-  if (r.status === 401) { gravarSenha(""); pedirSenha("Senha incorreta. Tente de novo."); return null; }
+  if (r.status === 401) { gravarSenha(""); const e = new Error("Senha incorreta. Tente de novo."); e.senha = true; throw e; }
   if (!r.ok) throw new Error(j.erro || "O servidor do Jarvis não respondeu.");
-  return j;
+  return { ...j, em: Date.now() };
 }
 
-async function iniciar() {
+function adiantarToken() {
+  if (!lerSenha() || buscandoToken) return buscandoToken;
+  if (tokenPronto && Date.now() - tokenPronto.em < TOKEN_VALIDADE_MS) return Promise.resolve(tokenPronto);
+  buscandoToken = buscarToken()
+    .then((t) => (tokenPronto = t))
+    .catch((e) => { tokenPronto = null; throw e; })
+    .finally(() => { buscandoToken = null; });
+  buscandoToken.catch(() => {});
+  return buscandoToken;
+}
+
+async function pegarToken() {
+  if (tokenPronto && Date.now() - tokenPronto.em < TOKEN_VALIDADE_MS) {
+    const t = tokenPronto; tokenPronto = null; return t;
+  }
+  const t = await (buscandoToken || adiantarToken());
+  tokenPronto = null;
+  return t;
+}
+
+async function iniciar(auto = false) {
   if (fase !== "parado") return;
+  if (!lerSenha()) { pedirSenha(); return; }
   mostrarErro("");
   falaJarvis = ""; falaVoce = ""; novoTurno = true; mostrarLegenda();
   encerrandoDePropósito = false;
   mudarFase("conectando");
 
-  // O áudio e o microfone precisam ser ligados logo no toque (regra do iPhone).
+  // Tudo em paralelo: token, conexão com o Google, microfone e áudio.
+  contexto = contexto || new (window.AudioContext || window.webkitAudioContext)();
+  const audioOk = contexto.resume().catch(() => {});
+  const tokenP = pegarToken();
+  const micP = navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+  });
+  micP.catch(() => {});
+
+  let sessao;
   try {
-    contexto = contexto || new (window.AudioContext || window.webkitAudioContext)();
-    await contexto.resume();
-    microfone = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
-    });
+    sessao = await tokenP;
+    if (!sessao) { encerrar(); pedirSenha(); return; }
   } catch (e) {
     encerrar();
-    mostrarErro(e?.name === "NotAllowedError"
-      ? "O microfone foi bloqueado. Libere em Ajustes › Safari › Microfone e tente de novo."
-      : "Não consegui ligar o microfone deste aparelho.");
+    if (e.senha) pedirSenha(e.message); else mostrarErro(e?.message || "Não consegui conectar. Tente de novo.");
     return;
   }
+  conectar(sessao); // o Google já vai preparando enquanto o microfone liga
 
   try {
+    const mic = await micP;
+    if (fase === "parado") { mic.getTracks().forEach((t) => t.stop()); return; } // encerrado no meio
+    microfone = mic;
+    await audioOk;
     await prepararAudio();
-    const sessao = await pedirToken();
-    if (!sessao) { encerrar(); return; }
-    conectar(sessao);
+    ligarMicrofoneSePronto();
+    if (contexto.state !== "running") mostrarErro("Toque em qualquer lugar da tela para ouvir o Jarvis.");
   } catch (e) {
     encerrar();
-    mostrarErro(e?.message || "Não consegui conectar. Tente de novo.");
+    if (auto) { el.estado.textContent = "Toque em qualquer lugar para começar"; return; }
+    mostrarErro(e?.name === "NotAllowedError"
+      ? "O microfone foi bloqueado. Libere o microfone nos ajustes do navegador e tente de novo."
+      : "Não consegui ligar o microfone deste aparelho.");
   }
+  adiantarToken(); // já deixa o próximo token pronto
+}
+
+let setupOk = false;
+function ligarMicrofoneSePronto() {
+  if (!setupOk || !noMic || noMic.port.onmessage) return;
+  noMic.port.onmessage = (ev) => { if (!mudo) enviarAudio(ev.data); };
 }
 
 function conectar({ token, modelo }) {
+  setupOk = false;
   ws = new WebSocket(`${WS_BASE}?access_token=${encodeURIComponent(token)}`);
   ws.onopen = () => enviar({ setup: { model: modelo } });
   ws.onmessage = async (ev) => {
@@ -123,8 +169,9 @@ function enviar(obj) { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.strin
 function tratarMensagem(m) {
   if (m.setupComplete) {
     mudarFase("pensando");
-    // Liga o envio do microfone e pede o cumprimento inicial.
-    noMic.port.onmessage = (ev) => { if (!mudo) enviarAudio(ev.data); };
+    // Liga o envio do microfone (assim que ele estiver pronto) e pede o cumprimento.
+    setupOk = true;
+    ligarMicrofoneSePronto();
     enviar({
       clientContent: {
         turns: [{ role: "user", parts: [{ text: "(O Joze acabou de abrir o app. Cumprimente-o em uma frase curta, de acordo com o horário, e pergunte em que pode ajudar.)" }] }],
@@ -172,6 +219,7 @@ function alternarMudo() {
 
 function encerrar() {
   encerrandoDePropósito = true;
+  setupOk = false;
   try { ws?.close(); } catch {}
   ws = null;
   pararVoz();
@@ -204,6 +252,7 @@ el.formSenha.addEventListener("submit", (ev) => {
   gravarSenha(s);
   el.senhaBox.hidden = true;
   mostrarErro("");
+  tokenPronto = null;
   iniciar();
 });
 
@@ -348,9 +397,28 @@ requestAnimationFrame(desenhar);
 
 // ---------- Botões ----------
 
-el.iniciar.addEventListener("click", iniciar);
-el.orbe.addEventListener("click", () => { if (fase === "parado") iniciar(); });
+el.iniciar.addEventListener("click", (ev) => { ev.stopPropagation(); iniciar(); });
+el.mudo.addEventListener("click", (ev) => { ev.stopPropagation(); alternarMudo(); });
+el.encerrar.addEventListener("click", (ev) => { ev.stopPropagation(); encerrar(); });
 el.orbe.addEventListener("keydown", (ev) => { if ((ev.key === "Enter" || ev.key === " ") && fase === "parado") { ev.preventDefault(); iniciar(); } });
-el.mudo.addEventListener("click", alternarMudo);
-el.encerrar.addEventListener("click", encerrar);
-document.addEventListener("visibilitychange", () => { if (document.hidden && fase !== "parado") encerrar(); });
+
+// Toque em QUALQUER lugar: começa a conversa, ou destrava o som se o iPhone segurou.
+document.addEventListener("pointerdown", (ev) => {
+  if (ev.target.closest("#senha-box, button")) return;
+  if (contexto && contexto.state !== "running") {
+    contexto.resume().then(() => { if (el.erro.textContent.startsWith("Toque em qualquer lugar")) mostrarErro(""); }).catch(() => {});
+  }
+  if (fase === "parado") iniciar();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden && fase !== "parado") encerrar();
+  if (!document.hidden) adiantarToken();
+});
+
+// Ao abrir: já busca o token e começa a conversa sozinho (abrir pelo ícone ou pela Siri).
+adiantarToken();
+if (lerSenha() && new URLSearchParams(location.search).get("auto") !== "0") {
+  el.estado.textContent = "Iniciando…";
+  setTimeout(() => iniciar(true), 50);
+}

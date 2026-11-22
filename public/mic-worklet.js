@@ -1,11 +1,11 @@
 // Pega o som do microfone, converte para 16 kHz / 16 bits (formato do Gemini)
-// e entrega em pedaços de ~100 ms para a página enviar.
+// e entrega em pedaços de ~40 ms para a página enviar (menos atraso).
 class Microfone extends AudioWorkletProcessor {
   constructor() {
     super();
     this.razao = sampleRate / 16000;
     this.pos = 0;
-    this.buf = new Int16Array(1600);
+    this.buf = new Int16Array(640);
     this.n = 0;
   }
   process(entradas) {
