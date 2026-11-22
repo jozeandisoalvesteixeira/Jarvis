@@ -1,0 +1,59 @@
+# Gera o app do Jarvis para iPhone (arquivo .ipa sem assinatura).
+# A assinatura é feita no seu computador pelo Sideloadly/AltStore, com o seu
+# Apple ID grátis. Para rodar: GitHub > Actions > "App iPhone" > Run workflow.
+name: App iPhone
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "ios/**"
+      - "capacitor.config.json"
+      - ".github/workflows/app-iphone.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Preparar o projeto do iPhone
+        run: npx cap sync ios
+
+      - name: Compilar (sem assinatura)
+        run: |
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -archivePath "$RUNNER_TEMP/Jarvis.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            archive | tail -n 40
+
+      - name: Empacotar o .ipa
+        run: |
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$RUNNER_TEMP/Jarvis.xcarchive/Products/Applications/App.app" "$RUNNER_TEMP/ipa/Payload/"
+          cd "$RUNNER_TEMP/ipa" && zip -qry "$GITHUB_WORKSPACE/Jarvis.ipa" Payload
+          ls -lh "$GITHUB_WORKSPACE/Jarvis.ipa"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Jarvis-iPhone
+          path: Jarvis.ipa
+          retention-days: 30

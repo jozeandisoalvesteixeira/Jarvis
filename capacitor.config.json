@@ -1,0 +1,14 @@
+{
+  "appId": "br.com.desvinculeja.jarvis",
+  "appName": "Jarvis",
+  "webDir": "public",
+  "server": {
+    "url": "https://jarvis-gamma-nine-92.vercel.app",
+    "allowNavigation": ["jarvis-gamma-nine-92.vercel.app"]
+  },
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#050605",
+    "limitsNavigationsToAppBoundDomains": false
+  }
+}

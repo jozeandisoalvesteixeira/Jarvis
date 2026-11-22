@@ -17,6 +17,18 @@ Projeto separado do CRM: não altera nada no `crmdesvinculeja`.
 - `api/_persona.js`: quem o Jarvis é, como fala e o que sabe sobre a
   Desvincule Já. Edite aqui para mudar a personalidade.
 
+## App de iPhone (grátis, por sideload)
+
+- `ios/` e `capacitor.config.json`: o app nativo é uma "casca" que abre o site
+  do Jarvis. Assim, toda mudança no site chega ao app sem reinstalar. No app,
+  o som e o microfone funcionam sem precisar tocar na tela.
+- `.github/workflows/app-iphone.yml`: gera o `Jarvis.ipa` (sem assinatura) num
+  Mac do GitHub. Rode em GitHub > Actions > App iPhone > Run workflow e baixe o
+  arquivo em "Artifacts".
+- Instale no iPhone com o **Sideloadly** (Windows ou Mac), usando o seu Apple
+  ID grátis. Contas grátis: o app vale 7 dias e precisa ser reinstalado (ou
+  renovado pelo AltStore).
+
 ## Variáveis na Vercel (Settings > Environment Variables)
 
 | Nome | O que é |

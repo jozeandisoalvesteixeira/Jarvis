@@ -10,6 +10,11 @@
     "check": "node --check api/session.js && node --check api/_persona.js && node --check public/app.js && node --check public/mic-worklet.js"
   },
   "dependencies": {
+    "@capacitor/core": "^8.6.2",
+    "@capacitor/ios": "^8.6.2",
     "@google/genai": "^3.6.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.2"
   }
 }
